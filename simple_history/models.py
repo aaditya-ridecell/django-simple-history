@@ -478,12 +478,14 @@ class HistoricalRecords(object):
         return meta_fields
 
     def post_save(self, instance, created, using=None, **kwargs):
-        if not created and hasattr(instance, "skip_history_when_saving"):
+        if getattr(instance, 'skip_history_when_saving', False):
             return
         if not kwargs.get("raw", False):
             self.create_historical_record(instance, created and "+" or "~", using=using)
 
     def post_delete(self, instance, using=None, **kwargs):
+        if getattr(instance, 'skip_history_when_saving', False):
+            return
         if self.cascade_delete_history:
             manager = getattr(instance, self.manager_name)
             manager.using(using).all().delete()
