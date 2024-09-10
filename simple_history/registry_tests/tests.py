@@ -1,22 +1,24 @@
-from __future__ import unicode_literals
-
 import unittest
 import uuid
 from datetime import datetime, timedelta
+from io import StringIO
 
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.core import management
-from django.test import TestCase, override_settings
-from six.moves import cStringIO as StringIO
+from django.test import TestCase, TransactionTestCase, override_settings
 
 from simple_history import exceptions, register
+
 from ..tests.models import (
     Choice,
     InheritTracking1,
     InheritTracking2,
     InheritTracking3,
     InheritTracking4,
+    ModelWithCustomAttrForeignKey,
+    ModelWithCustomAttrOneToOneField,
+    ModelWithHistoryInDifferentApp,
     Poll,
     Restaurant,
     TrackedAbstractBaseA,
@@ -27,8 +29,6 @@ from ..tests.models import (
     UserAccessorOverride,
     UUIDRegisterModel,
     Voter,
-    ModelWithCustomAttrForeignKey,
-    ModelWithHistoryInDifferentApp,
 )
 
 get_model = apps.get_model
@@ -80,11 +80,11 @@ class RegisterTest(TestCase):
 class TestUserAccessor(unittest.TestCase):
     def test_accessor_default(self):
         register(UserAccessorDefault)
-        assert not hasattr(User, "historicaluseraccessordefault_set")
+        self.assertFalse(hasattr(User, "historicaluseraccessordefault_set"))
 
     def test_accessor_override(self):
         register(UserAccessorOverride, user_related_name="my_history_model_accessor")
-        assert hasattr(User, "my_history_model_accessor")
+        self.assertTrue(hasattr(User, "my_history_model_accessor"))
 
 
 class TestInheritedModule(TestCase):
@@ -105,7 +105,7 @@ class TestTrackingInheritance(TestCase):
     def test_tracked_abstract_base(self):
         self.assertEqual(
             sorted(
-                [f.attname for f in TrackedWithAbstractBase.history.model._meta.fields]
+                f.attname for f in TrackedWithAbstractBase.history.model._meta.fields
             ),
             sorted(
                 [
@@ -199,15 +199,23 @@ class TestTrackingInheritance(TestCase):
 
 
 class TestCustomAttrForeignKey(TestCase):
-    """ https://github.com/jazzband/django-simple-history/issues/431 """
+    """https://github.com/jazzband/django-simple-history/issues/431"""
 
     def test_custom_attr(self):
         field = ModelWithCustomAttrForeignKey.history.model._meta.get_field("poll")
         self.assertEqual(field.attr_name, "custom_poll")
 
 
+class TestCustomAttrOneToOneField(TestCase):
+    """https://github.com/jazzband/django-simple-history/issues/870"""
+
+    def test_custom_attr(self):
+        field = ModelWithCustomAttrOneToOneField.history.model._meta.get_field("poll")
+        self.assertFalse(hasattr(field, "attr_name"))
+
+
 @override_settings(MIGRATION_MODULES={})
-class TestMigrate(TestCase):
+class TestMigrate(TransactionTestCase):
     def test_makemigration_command(self):
         management.call_command(
             "makemigrations", "migration_test_app", stdout=StringIO()
@@ -220,7 +228,7 @@ class TestMigrate(TestCase):
 
 
 class TestModelWithHistoryInDifferentApp(TestCase):
-    """ https://github.com/jazzband/django-simple-history/issues/485 """
+    """https://github.com/jazzband/django-simple-history/issues/485"""
 
     def test__different_app(self):
         appLabel = ModelWithHistoryInDifferentApp.history.model._meta.app_label

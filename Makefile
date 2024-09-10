@@ -4,9 +4,7 @@ clean: clean-build clean-pyc
 	rm -fr htmlcov/
 
 clean-build:
-	rm -fr build/
 	rm -fr dist/
-	rm -fr *.egg-info
 
 clean-pyc:
 	find . -name '*.pyc' -exec rm -f {} +
@@ -14,7 +12,7 @@ clean-pyc:
 	find . -name '*~' -exec rm -f {} +
 
 init:
-	pip install "tox>=1.8" coverage Sphinx
+	pip install "tox>=1.8" coverage
 
 test:
 	coverage erase
@@ -24,12 +22,11 @@ test:
 docs: documentation
 
 documentation:
-	sphinx-build -b html -d docs/_build/doctrees docs docs/_build/html
+	tox -e docs
 
 dist: clean
-	pip install -U wheel
-	python setup.py sdist
-	python setup.py bdist_wheel
+	pip install -U build
+	python -m build
 	for file in dist/* ; do gpg --detach-sign -a "$$file" ; done
 	ls -l dist
 
@@ -44,4 +41,4 @@ release: dist
 	twine upload dist/*
 
 format:
-	black simple_history setup.py runtests.py
+	tox -e format

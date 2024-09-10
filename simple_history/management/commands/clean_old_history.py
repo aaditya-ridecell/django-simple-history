@@ -1,9 +1,9 @@
-from django.utils import timezone
 from django.db import transaction
+from django.utils import timezone
 
-from . import populate_history
 from ... import models, utils
 from ...exceptions import NotHistoricalModelError
+from . import populate_history
 
 
 class Command(populate_history.Command):
@@ -53,15 +53,14 @@ class Command(populate_history.Command):
         self._process(to_process, days_back=options["days"], dry_run=options["dry"])
 
     def _process(self, to_process, days_back=None, dry_run=True):
-
         start_date = timezone.now() - timezone.timedelta(days=days_back)
         for model, history_model in to_process:
             history_model_manager = history_model.objects
             history_model_manager = history_model_manager.filter(
                 history_date__lt=start_date
             )
-            found = len(history_model_manager)
-            self.log("{0} has {1} old historical entries".format(model, found), 2)
+            found = history_model_manager.count()
+            self.log(f"{model} has {found} old historical entries", 2)
             if not found:
                 continue
             if not dry_run:

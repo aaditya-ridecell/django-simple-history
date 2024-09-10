@@ -1,10 +1,11 @@
 from datetime import date
-from unittest import skipIf
+from unittest import mock
 
-import django
+from django.http import HttpResponse
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from simple_history.models import HistoricalRecords
 from simple_history.tests.custom_user.models import CustomUser
 from simple_history.tests.models import (
     BucketDataRegisterRequestUser,
@@ -148,6 +149,38 @@ class MiddlewareTest(TestCase):
 
         self.assertListEqual([h.history_user_id for h in history], [member1.id])
 
+    # The `request` attribute of `HistoricalRecords.context` should be deleted
+    # even if this setting is set to `True`
+    @override_settings(DEBUG_PROPAGATE_EXCEPTIONS=True)
+    @mock.patch("simple_history.tests.view.MockableView.get")
+    def test_request_attr_is_deleted_after_each_response(self, func_mock):
+        """https://github.com/jazzband/django-simple-history/issues/1189"""
+
+        def assert_has_request_attr(has_attr: bool):
+            self.assertEqual(hasattr(HistoricalRecords.context, "request"), has_attr)
+
+        def mocked_get(*args, **kwargs):
+            assert_has_request_attr(True)
+            response_ = HttpResponse(status=200)
+            response_.historical_records_request = HistoricalRecords.context.request
+            return response_
+
+        func_mock.side_effect = mocked_get
+        self.client.force_login(self.user)
+        mockable_url = reverse("mockable")
+
+        assert_has_request_attr(False)
+        response = self.client.get(mockable_url)
+        assert_has_request_attr(False)
+        # Check that the `request` attr existed while handling the request
+        self.assertEqual(response.historical_records_request.user, self.user)
+
+        func_mock.side_effect = RuntimeError()
+        with self.assertRaises(RuntimeError):
+            self.client.get(mockable_url)
+        # The request variable should be deleted even if an exception was raised
+        assert_has_request_attr(False)
+
 
 @override_settings(**middleware_override_settings)
 class MiddlewareBulkOpsTest(TestCase):
@@ -178,7 +211,9 @@ class MiddlewareBulkOpsTest(TestCase):
 
         self.assertListEqual([ph.history_user_id for ph in poll_history], [None, None])
 
-    def test_request_user_is_overwritten_by_default_user_on_bulk_create_view(self,):
+    def test_request_user_is_overwritten_by_default_user_on_bulk_create_view(
+        self,
+    ):
         self.client.force_login(self.user)
         self.client.post(reverse("poll-bulk-create-with-default-user"), data={})
 
@@ -190,9 +225,6 @@ class MiddlewareBulkOpsTest(TestCase):
         self.assertFalse(any(ph.history_user_id == self.user.id for ph in poll_history))
         self.assertFalse(any(ph.history_user_id is None for ph in poll_history))
 
-    @skipIf(
-        django.VERSION < (2, 2,), reason="bulk_update does not exist before 2.2",
-    )
     def test_user_is_set_on_bulk_update_view_when_logged_in(self):
         self.client.force_login(self.user)
         poll_1 = Poll.objects.create(question="Test question 1", pub_date=date.today())
@@ -214,9 +246,6 @@ class MiddlewareBulkOpsTest(TestCase):
             self.user.id, poll_2.history.latest("history_date").history_user_id
         )
 
-    @skipIf(
-        django.VERSION < (2, 2,), reason="bulk_update does not exist before 2.2",
-    )
     def test_user_is_not_set_on_bulk_update_view_when_not_logged_in(self):
         poll_1 = Poll.objects.create(question="Test question 1", pub_date=date.today())
         poll_2 = Poll.objects.create(
@@ -228,9 +257,6 @@ class MiddlewareBulkOpsTest(TestCase):
         self.assertIsNone(poll_1.history.latest("history_date").history_user_id)
         self.assertIsNone(poll_2.history.latest("history_date").history_user_id)
 
-    @skipIf(
-        django.VERSION < (2, 2,), reason="bulk_update does not exist before 2.2",
-    )
     def test_request_user_is_overwritten_by_default_user_on_bulk_update(self):
         self.client.force_login(self.user)
         poll = Poll.objects.create(pub_date=date(2020, 1, 1), question="123")

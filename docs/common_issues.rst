@@ -55,6 +55,27 @@ You can also specify a default user or default change reason responsible for the
     >>> Poll.history.get(id=data[0].id).history_user == user
     True
 
+If you're using `additional fields in historical models`_ and have custom fields to
+batch-create into the history, pass the optional dict argument ``custom_historical_attrs``
+containing the field names and values.
+A field ``session`` would be passed as ``custom_historical_attrs={'session': 'training'}``.
+
+.. _additional fields in historical models: historical_model.html#adding-additional-fields-to-historical-models
+
+.. code-block:: pycon
+
+    >>> from simple_history.tests.models import PollWithHistoricalSessionAttr
+    >>> data = [
+        PollWithHistoricalSessionAttr(id=x, question=f'Question {x}')
+        for x in range(10)
+    ]
+    >>> objs = bulk_create_with_history(
+            data, PollWithHistoricalSessionAttr,
+            custom_historical_attrs={'session': 'training'}
+        )
+    >>> data[0].history.get().session
+    'training'
+
 Bulk Updating a Model with History (New)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -87,6 +108,22 @@ default manager returns a filtered set), you can specify which manager to use wi
     >>>
     >>> data = [PollWithAlternativeManager(id=x, question='Question ' + str(x), pub_date=now()) for x in range(1000)]
     >>> objs = bulk_create_with_history(data, PollWithAlternativeManager, batch_size=500, manager=PollWithAlternativeManager.all_polls)
+
+If you're using `additional fields in historical models`_ and have custom fields to
+batch-update into the history, pass the optional dict argument ``custom_historical_attrs``
+containing the field names and values.
+A field ``session`` would be passed as ``custom_historical_attrs={'session': 'jam'}``.
+
+.. _additional fields in historical models: historical_model.html#adding-additional-fields-to-historical-models
+
+.. code-block:: pycon
+
+    >>> bulk_update_with_history(
+            data, PollWithHistoricalSessionAttr, [],
+            custom_historical_attrs={'session': 'jam'}
+        )
+    >>> data[0].history.latest().session
+    'jam'
 
 QuerySet Updates with History (Updated in Django 2.2)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -123,29 +160,6 @@ Tracking Custom Users
     The reason for this, is that unfortunately ``HistoricalRecords``
     cannot be set directly on a swapped user model because of the user
     foreign key to track the user making changes.
-
-Using django-webtest with Middleware
-------------------------------------
-
-When using django-webtest_ to test your Django project with the
-django-simple-history middleware, you may run into an error similar to the
-following::
-
-    django.db.utils.IntegrityError: (1452, 'Cannot add or update a child row: a foreign key constraint fails (`test_env`.`core_historicaladdress`, CONSTRAINT `core_historicaladdress_history_user_id_0f2bed02_fk_user_user_id` FOREIGN KEY (`history_user_id`) REFERENCES `user_user` (`id`))')
-
-.. _django-webtest: https://github.com/django-webtest/django-webtest
-
-This error occurs because ``django-webtest`` sets
-``DEBUG_PROPAGATE_EXCEPTIONS`` to true preventing the middleware from cleaning
-up the request. To solve this issue, add the following code to any
-``clean_environment`` or ``tearDown`` method that
-you use:
-
-.. code-block:: python
-
-    from simple_history.middleware import HistoricalRecords
-    if hasattr(HistoricalRecords.thread, 'request'):
-        del HistoricalRecords.thread.request
 
 Using F() expressions
 ---------------------
@@ -253,4 +267,25 @@ Working with BitBucket Pipelines
 --------------------------------
 
 When using BitBucket Pipelines to test your Django project with the
-django-simple-history middleware, you will run into an error relating to missing migrations relating to the historic User model from the auth app. This is because the migration file is not held within either your project or django-simple-history.  In order to pypass the error you need to add a ```python manage.py makemigrations auth``` step into your YML file prior to running the tests.
+django-simple-history middleware, you will run into an error relating to missing migrations relating to the historic User model from the auth app. This is because the migration file is not held within either your project or django-simple-history.  In order to bypass the error you need to add a ```python manage.py makemigrations auth``` step into your YML file prior to running the tests.
+
+
+Using custom OneToOneFields
+---------------------------
+
+If you are using a custom OneToOneField that has additional arguments and receiving
+the following ``TypeError``::
+
+    TypeError: __init__() got an unexpected keyword argument
+
+This is because Django Simple History coerces ``OneToOneField`` into ``ForeignKey``
+on the historical model. You can work around this by excluded those additional
+arguments using ``excluded_field_kwargs`` as follows:
+
+.. code-block:: python
+
+    class Poll(models.Model):
+        organizer = CustomOneToOneField(Organizer, ..., custom_argument="some_value")
+        history = HistoricalRecords(
+            excluded_field_kwargs={"organizer": set(["custom_argument"])}
+        )

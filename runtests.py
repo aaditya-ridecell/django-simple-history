@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-import logging
+import sys
+from argparse import ArgumentParser
 from os.path import abspath, dirname, join
 from shutil import rmtree
-import sys
 
 import django
 from django.conf import settings
@@ -35,7 +35,72 @@ class DisableMigrations:
         return None
 
 
-DEFAULT_SETTINGS = dict(
+DATABASE_NAME_TO_DATABASE_SETTINGS = {
+    "sqlite3": {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+        },
+        "other": {"ENGINE": "django.db.backends.sqlite3"},
+    },
+    "postgres": {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": "test",
+            "USER": "postgres",
+            "PASSWORD": "postgres",
+            "HOST": "127.0.0.1",
+            "PORT": 5432,
+        },
+        "other": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": "other",
+            "USER": "postgres",
+            "PASSWORD": "postgres",
+            "HOST": "127.0.0.1",
+            "PORT": 5432,
+        },
+    },
+    "mysql": {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": "test",
+            "USER": "root",
+            "PASSWORD": "mysql",
+            "HOST": "127.0.0.1",
+            "PORT": 3306,
+        },
+        "other": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": "other",
+            "USER": "root",
+            "PASSWORD": "mysql",
+            "HOST": "127.0.0.1",
+            "PORT": 3306,
+        },
+    },
+    "mariadb": {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": "test",
+            "USER": "root",
+            "PASSWORD": "mariadb",
+            "HOST": "127.0.0.1",
+            "PORT": 3307,
+        },
+        "other": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": "other",
+            "USER": "root",
+            "PASSWORD": "mariadb",
+            "HOST": "127.0.0.1",
+            "PORT": 3307,
+        },
+    },
+}
+DEFAULT_DATABASE_NAME = "sqlite3"
+
+
+DEFAULT_SETTINGS = dict(  # nosec
     SECRET_KEY="not a secret",
     ALLOWED_HOSTS=["localhost"],
     AUTH_USER_MODEL="custom_user.CustomUser",
@@ -43,9 +108,18 @@ DEFAULT_SETTINGS = dict(
     MEDIA_ROOT=media_root,
     STATIC_URL="/static/",
     INSTALLED_APPS=installed_apps,
-    DATABASES={
-        "default": {"ENGINE": "django.db.backends.sqlite3"},
-        "other": {"ENGINE": "django.db.backends.sqlite3"},
+    LOGGING={
+        "version": 1,
+        "disable_existing_loggers": True,
+        "handlers": {
+            "console": {
+                "class": "logging.StreamHandler",
+            },
+        },
+        "root": {
+            "handlers": ["console"],
+            "level": "INFO",
+        },
     },
     MIGRATION_MODULES=DisableMigrations(),
     TEMPLATES=[
@@ -54,12 +128,21 @@ DEFAULT_SETTINGS = dict(
             "APP_DIRS": True,
             "OPTIONS": {
                 "context_processors": [
+                    "django.template.context_processors.request",
                     "django.contrib.auth.context_processors.auth",
                     "django.contrib.messages.context_processors.messages",
                 ]
             },
         }
     ],
+    STORAGES={
+        "default": {
+            # Speeds up tests and prevents locally storing files created through them
+            "BACKEND": "django.core.files.storage.InMemoryStorage",
+        },
+    },
+    DEFAULT_AUTO_FIELD="django.db.models.AutoField",
+    USE_TZ=False,
 )
 MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -67,26 +150,40 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
 ]
 
-if django.__version__ >= "2.0":
-    DEFAULT_SETTINGS["MIDDLEWARE"] = MIDDLEWARE
-else:
-    DEFAULT_SETTINGS["MIDDLEWARE_CLASSES"] = MIDDLEWARE
+DEFAULT_SETTINGS["MIDDLEWARE"] = MIDDLEWARE
+
+
+def get_default_settings(*, database_name=DEFAULT_DATABASE_NAME):
+    return {
+        **DEFAULT_SETTINGS,
+        "DATABASES": DATABASE_NAME_TO_DATABASE_SETTINGS[database_name],
+    }
 
 
 def main():
+    parser = ArgumentParser(description="Run package tests.")
+    parser.add_argument(
+        "--database", action="store", nargs="?", default=DEFAULT_DATABASE_NAME
+    )
+    parser.add_argument("--failfast", action="store_true")
+    parser.add_argument("--pdb", action="store_true")
+    parser.add_argument("--tag", action="append", nargs="?")
+    namespace = parser.parse_args()
     if not settings.configured:
-        settings.configure(**DEFAULT_SETTINGS)
+        default_settings = get_default_settings(database_name=namespace.database)
+        settings.configure(**default_settings)
+
     django.setup()
-    tags = [t.split("=")[1] for t in sys.argv if t.startswith("--tag")]
-    failures = DiscoverRunner(failfast=False, tags=tags).run_tests(
-        ["simple_history.tests"]
-    )
-    failures |= DiscoverRunner(failfast=False, tags=tags).run_tests(
-        ["simple_history.registry_tests"]
-    )
+
+    tags = namespace.tag
+    failures = DiscoverRunner(
+        failfast=bool(namespace.failfast), pdb=bool(namespace.pdb), tags=tags
+    ).run_tests(["simple_history.tests"])
+    failures |= DiscoverRunner(
+        failfast=bool(namespace.failfast), pdb=bool(namespace.pdb), tags=tags
+    ).run_tests(["simple_history.registry_tests"])
     sys.exit(failures)
 
 
 if __name__ == "__main__":
-    logging.basicConfig()
     main()

@@ -1,6 +1,6 @@
-from __future__ import unicode_literals
+from importlib import metadata
 
-__version__ = "2.12.0"
+__version__ = metadata.version("django-simple-history")
 
 
 def register(
@@ -9,7 +9,7 @@ def register(
     manager_name="history",
     records_class=None,
     table_name=None,
-    **records_config
+    **records_config,
 ):
     """
     Create historical model for `model` and attach history manager to `model`.

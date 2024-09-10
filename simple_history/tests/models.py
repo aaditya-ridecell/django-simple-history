@@ -1,19 +1,19 @@
-from __future__ import unicode_literals
-
 import datetime
 import uuid
+
 from django.apps import apps
 from django.conf import settings
 from django.db import models
+from django.db.models.deletion import CASCADE
+from django.db.models.fields.related import ForeignKey
 from django.urls import reverse
 
 from simple_history import register
-from simple_history.models import HistoricalRecords
-from .custom_user.models import CustomUser as User
+from simple_history.manager import HistoricalQuerySet, HistoryManager
+from simple_history.models import HistoricalRecords, HistoricForeignKey
 
-from .external.models import AbstractExternal
-from .external.models import AbstractExternal2
-from .external.models import AbstractExternal3
+from .custom_user.models import CustomUser as User
+from .external.models import AbstractExternal, AbstractExternal2, AbstractExternal3
 
 get_model = apps.get_model
 
@@ -26,6 +26,21 @@ class Poll(models.Model):
 
     def get_absolute_url(self):
         return reverse("poll-detail", kwargs={"pk": self.pk})
+
+
+class PollWithNonEditableField(models.Model):
+    question = models.CharField(max_length=200)
+    pub_date = models.DateTimeField("date published")
+    modified = models.DateTimeField(auto_now=True, editable=False)
+
+    history = HistoricalRecords()
+
+
+class PollWithUniqueQuestion(models.Model):
+    question = models.CharField(max_length=200, unique=True)
+    pub_date = models.DateTimeField("date published")
+
+    history = HistoricalRecords()
 
 
 class PollWithExcludeFields(models.Model):
@@ -65,7 +80,7 @@ class PollWithExcludedFKField(models.Model):
 
 class AlternativePollManager(models.Manager):
     def get_queryset(self):
-        return super(AlternativePollManager, self).get_queryset().exclude(id=1)
+        return super().get_queryset().exclude(id=1)
 
 
 class PollWithAlternativeManager(models.Model):
@@ -74,6 +89,22 @@ class PollWithAlternativeManager(models.Model):
 
     question = models.CharField(max_length=200)
     pub_date = models.DateTimeField("date published")
+
+    history = HistoricalRecords()
+
+
+class CustomPollManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().exclude(hidden=True)
+
+
+class PollWithCustomManager(models.Model):
+    some_objects = CustomPollManager()
+    all_objects = models.Manager()
+
+    question = models.CharField(max_length=200)
+    pub_date = models.DateTimeField("date published")
+    hidden = models.BooleanField(default=False)
 
     history = HistoricalRecords()
 
@@ -95,16 +126,127 @@ class PollWithHistoricalIPAddress(models.Model):
         return reverse("poll-detail", kwargs={"pk": self.pk})
 
 
+class SessionsHistoricalModel(models.Model):
+    session = models.CharField(max_length=200, null=True, default=None)
+
+    class Meta:
+        abstract = True
+
+
+class PollWithHistoricalSessionAttr(models.Model):
+    question = models.CharField(max_length=200)
+    history = HistoricalRecords(bases=[SessionsHistoricalModel])
+
+
+class PollWithManyToMany(models.Model):
+    question = models.CharField(max_length=200)
+    pub_date = models.DateTimeField("date published")
+    places = models.ManyToManyField("Place")
+
+    history = HistoricalRecords(m2m_fields=[places])
+
+
+class PollWithManyToManyCustomHistoryID(models.Model):
+    question = models.CharField(max_length=200)
+    pub_date = models.DateTimeField("date published")
+    places = models.ManyToManyField("Place")
+
+    history = HistoricalRecords(
+        m2m_fields=[places], history_id_field=models.UUIDField(default=uuid.uuid4)
+    )
+
+
+class PollQuerySet(HistoricalQuerySet):
+    def questions(self):
+        return self.filter(question__startswith="Question ")
+
+
+class PollManager(HistoryManager):
+    def low_ids(self):
+        return self.filter(id__lte=3)
+
+
+class PollWithQuerySetCustomizations(models.Model):
+    question = models.CharField(max_length=200)
+    pub_date = models.DateTimeField("date published")
+
+    history = HistoricalRecords(
+        history_manager=PollManager, historical_queryset=PollQuerySet
+    )
+
+
+class HistoricalRecordsWithExtraFieldM2M(HistoricalRecords):
+    def get_extra_fields_m2m(self, model, through_model, fields):
+        extra_fields = super().get_extra_fields_m2m(model, through_model, fields)
+
+        def get_class_name(self):
+            return self.__class__.__name__
+
+        extra_fields["get_class_name"] = get_class_name
+        return extra_fields
+
+
+class PollWithManyToManyWithIPAddress(models.Model):
+    question = models.CharField(max_length=200)
+    pub_date = models.DateTimeField("date published")
+    places = models.ManyToManyField("Place")
+
+    history = HistoricalRecordsWithExtraFieldM2M(
+        m2m_fields=[places], m2m_bases=[IPAddressHistoricalModel]
+    )
+
+
+class PollWithSeveralManyToMany(models.Model):
+    question = models.CharField(max_length=200)
+    pub_date = models.DateTimeField("date published")
+    places = models.ManyToManyField("Place", related_name="places_poll")
+    restaurants = models.ManyToManyField("Restaurant", related_name="restaurants_poll")
+    books = models.ManyToManyField("Book", related_name="books_poll")
+
+    history = HistoricalRecords(m2m_fields=[places, restaurants, books])
+
+
+class PollParentWithManyToMany(models.Model):
+    question = models.CharField(max_length=200)
+    pub_date = models.DateTimeField("date published")
+    places = models.ManyToManyField("Place")
+
+    history = HistoricalRecords(
+        m2m_fields=[places],
+        inherit=True,
+    )
+
+    class Meta:
+        abstract = True
+
+
+class PollChildBookWithManyToMany(PollParentWithManyToMany):
+    books = models.ManyToManyField("Book", related_name="books_poll_child")
+    _history_m2m_fields = ["books"]
+
+
+class PollChildRestaurantWithManyToMany(PollParentWithManyToMany):
+    restaurants = models.ManyToManyField(
+        "Restaurant", related_name="restaurants_poll_child"
+    )
+    _history_m2m_fields = [restaurants]
+
+
+class PollWithSelfManyToMany(models.Model):
+    relations = models.ManyToManyField("self")
+    history = HistoricalRecords(m2m_fields=[relations])
+
+
 class CustomAttrNameForeignKey(models.ForeignKey):
     def __init__(self, *args, **kwargs):
         self.attr_name = kwargs.pop("attr_name", None)
-        super(CustomAttrNameForeignKey, self).__init__(*args, **kwargs)
+        super().__init__(*args, **kwargs)
 
     def get_attname(self):
-        return self.attr_name or super(CustomAttrNameForeignKey, self).get_attname()
+        return self.attr_name or super().get_attname()
 
     def deconstruct(self):
-        name, path, args, kwargs = super(CustomAttrNameForeignKey, self).deconstruct()
+        name, path, args, kwargs = super().deconstruct()
         if self.attr_name:
             kwargs["attr_name"] = self.attr_name
         return name, path, args, kwargs
@@ -113,6 +255,26 @@ class CustomAttrNameForeignKey(models.ForeignKey):
 class ModelWithCustomAttrForeignKey(models.Model):
     poll = CustomAttrNameForeignKey(Poll, models.CASCADE, attr_name="custom_poll")
     history = HistoricalRecords()
+
+
+class CustomAttrNameOneToOneField(models.OneToOneField):
+    def __init__(self, *args, **kwargs):
+        self.attr_name = kwargs.pop("attr_name", None)
+        super().__init__(*args, **kwargs)
+
+    def get_attname(self):
+        return self.attr_name or super().get_attname()
+
+    def deconstruct(self):
+        name, path, args, kwargs = super().deconstruct()
+        if self.attr_name:
+            kwargs["attr_name"] = self.attr_name
+        return name, path, args, kwargs
+
+
+class ModelWithCustomAttrOneToOneField(models.Model):
+    poll = CustomAttrNameOneToOneField(Poll, models.CASCADE, attr_name="custom_poll")
+    history = HistoricalRecords(excluded_field_kwargs={"poll": {"attr_name"}})
 
 
 class Temperature(models.Model):
@@ -163,15 +325,13 @@ class Voter(models.Model):
 class HistoricalRecordsVerbose(HistoricalRecords):
     def get_extra_fields(self, model, fields):
         def verbose_str(self):
-            return "%s changed by %s as of %s" % (
+            return "{} changed by {} as of {}".format(
                 self.history_object,
                 self.history_user,
                 self.history_date,
             )
 
-        extra_fields = super(HistoricalRecordsVerbose, self).get_extra_fields(
-            model, fields
-        )
+        extra_fields = super().get_extra_fields(model, fields)
         extra_fields["__str__"] = verbose_str
         return extra_fields
 
@@ -198,7 +358,7 @@ class Person(models.Model):
         if hasattr(self, "skip_history_when_saving"):
             raise RuntimeError("error while saving")
         else:
-            super(Person, self).save(*args, **kwargs)
+            super().save(*args, **kwargs)
 
 
 class FileModel(models.Model):
@@ -225,6 +385,7 @@ class Document(models.Model):
     changed_by = models.ForeignKey(
         User, on_delete=models.CASCADE, null=True, blank=True
     )
+
     history = HistoricalRecords()
 
     @property
@@ -243,6 +404,12 @@ class Paper(Document):
         self.changed_by = value
 
 
+class RankedDocument(Document):
+    rank = models.IntegerField(default=50)
+
+    history = HistoricalRecords()
+
+
 class Profile(User):
     date_of_birth = models.DateField()
 
@@ -258,7 +425,9 @@ class State(models.Model):
 
 class Book(models.Model):
     isbn = models.CharField(max_length=15, primary_key=True)
-    history = HistoricalRecords(verbose_name="dead trees")
+    history = HistoricalRecords(
+        verbose_name="dead trees", verbose_name_plural="dead trees plural"
+    )
 
 
 class HardbackBook(Book):
@@ -275,6 +444,7 @@ class Library(models.Model):
 
     class Meta:
         verbose_name = "quiet please"
+        verbose_name_plural = "quiet please plural"
 
 
 class BaseModel(models.Model):
@@ -344,6 +514,14 @@ class UnicodeVerboseName(models.Model):
         verbose_name = "\u570b"
 
 
+class UnicodeVerboseNamePlural(models.Model):
+    name = models.CharField(max_length=100)
+    history = HistoricalRecords()
+
+    class Meta:
+        verbose_name_plural = "\u570b"
+
+
 class CustomFKError(models.Model):
     fk = models.ForeignKey(SecondLevelInheritedModel, on_delete=models.CASCADE)
     history = HistoricalRecords()
@@ -408,6 +586,7 @@ class Planet(models.Model):
 
     class Meta:
         verbose_name = "Planet"
+        verbose_name_plural = "Planets"
 
 
 class Contact(models.Model):
@@ -528,7 +707,7 @@ class InheritTracking4(TrackedAbstractBaseA):
 
 class BasePlace(models.Model):
     name = models.CharField(max_length=50)
-    history = HistoricalRecords(inherit=True)
+    history = HistoricalRecords(inherit=True, table_name="base_places_history")
 
 
 class InheritedRestaurant(BasePlace):
@@ -645,9 +824,9 @@ class CustomManagerNameModel(models.Model):
     log = HistoricalRecords()
 
 
-"""
-Following classes test the "custom_model_name" option
-"""
+#
+# Following classes test the "custom_model_name" option
+#
 
 
 class OverrideModelNameAsString(models.Model):
@@ -657,13 +836,11 @@ class OverrideModelNameAsString(models.Model):
 
 class OverrideModelNameAsCallable(models.Model):
     name = models.CharField(max_length=15, unique=True)
-    history = HistoricalRecords(custom_model_name=lambda x: "Audit{}".format(x))
+    history = HistoricalRecords(custom_model_name=lambda x: f"Audit{x}")
 
 
 class AbstractModelCallable1(models.Model):
-    history = HistoricalRecords(
-        inherit=True, custom_model_name=lambda x: "Audit{}".format(x)
-    )
+    history = HistoricalRecords(inherit=True, custom_model_name=lambda x: f"Audit{x}")
 
     class Meta:
         abstract = True
@@ -724,3 +901,85 @@ class ModelWithExcludedManyToMany(models.Model):
     name = models.CharField(max_length=15, unique=True)
     other = models.ManyToManyField(ManyToManyModelOther)
     history = HistoricalRecords(excluded_fields=["other"])
+
+
+class ModelWithSingleNoDBIndexUnique(models.Model):
+    name = models.CharField(max_length=15, unique=True, db_index=True)
+    name_keeps_index = models.CharField(max_length=15, unique=True, db_index=True)
+    history = HistoricalRecords(no_db_index="name")
+
+
+class ModelWithMultipleNoDBIndex(models.Model):
+    name = models.CharField(max_length=15, db_index=True)
+    name_keeps_index = models.CharField(max_length=15, db_index=True)
+    fk = models.ForeignKey(
+        "Library", on_delete=models.CASCADE, null=True, related_name="+"
+    )
+    fk_keeps_index = models.ForeignKey(
+        "Library", on_delete=models.CASCADE, null=True, related_name="+"
+    )
+    history = HistoricalRecords(no_db_index=["name", "fk", "other"])
+
+
+class TestOrganization(models.Model):
+    name = models.CharField(max_length=15, unique=True)
+
+
+class TestOrganizationWithHistory(models.Model):
+    name = models.CharField(max_length=15, unique=True)
+    history = HistoricalRecords()
+
+
+class TestParticipantToHistoricOrganization(models.Model):
+    """
+    Non-historic table foreign key to historic table.
+
+    In this case it should simply behave like ForeignKey because
+    the origin model (this one) cannot be historic, so foreign key
+    lookups are always "current".
+    """
+
+    name = models.CharField(max_length=15, unique=True)
+    organization = HistoricForeignKey(
+        TestOrganizationWithHistory, on_delete=CASCADE, related_name="participants"
+    )
+
+
+class TestHistoricParticipantToOrganization(models.Model):
+    """
+    Historic table foreign key to non-historic table.
+
+    In this case it should simply behave like ForeignKey because
+    the origin model (this one) can be historic but the target model
+    is not, so foreign key lookups are always "current".
+    """
+
+    name = models.CharField(max_length=15, unique=True)
+    organization = HistoricForeignKey(
+        TestOrganization, on_delete=CASCADE, related_name="participants"
+    )
+    history = HistoricalRecords()
+
+
+class TestHistoricParticipanToHistoricOrganization(models.Model):
+    """
+    Historic table foreign key to historic table.
+
+    In this case as_of queries on the origin model (this one)
+    or on the target model (the other one) will traverse the
+    foreign key relationship honoring the timepoint of the
+    original query.  This only happens when both tables involved
+    are historic.
+
+    NOTE: related_name has to be different than the one used in
+          TestParticipantToHistoricOrganization as they are
+          sharing the same target table.
+    """
+
+    name = models.CharField(max_length=15, unique=True)
+    organization = HistoricForeignKey(
+        TestOrganizationWithHistory,
+        on_delete=CASCADE,
+        related_name="historic_participants",
+    )
+    history = HistoricalRecords()
